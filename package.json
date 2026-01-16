@@ -15,7 +15,7 @@
     "db:push": "prisma db push",
     "db:migrate": "prisma migrate dev",
     "db:studio": "prisma studio",
-    "db:seed": "bun run prisma/seed.ts",
+    "db:seed": "node prisma/seed.js",
     "postinstall": "prisma generate",
     "prepare": "husky"
   },
@@ -46,6 +46,9 @@
     "*.{js,jsx,json,css,md}": [
       "prettier --write"
     ]
+  },
+  "prisma": {
+    "seed": "node prisma/seed.js"
   },
   "devDependencies": {
     "@svgr/webpack": "^8.1.0",
