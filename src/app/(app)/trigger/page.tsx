@@ -156,9 +156,7 @@ export default function TriggerPage() {
         signUpDate: data.signUpDate?.trim() ? data.signUpDate.trim() : undefined,
         flowType: data.flowType?.trim() ? data.flowType.trim() : undefined,
         documentsUploaded:
-          data.documentsUploaded && data.documentsUploaded !== ""
-            ? data.documentsUploaded
-            : undefined,
+          data.documentsUploaded ? data.documentsUploaded : undefined,
         licenseCountry: data.licenseCountry?.trim()
           ? data.licenseCountry.trim()
           : undefined,
