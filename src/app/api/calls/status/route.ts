@@ -87,7 +87,7 @@ export async function GET() {
         },
       },
       orderBy: { createdAt: "desc" },
-      take: 20,
+      take: 50,
     });
 
     // If polling credentials aren't configured, just return DB state (callbacks can still mark calls completed).
@@ -106,8 +106,8 @@ export async function GET() {
           `[Status API] Call ${call.id}: status=${call.status}, runId=${call.runId}`,
         );
 
-        // Only poll if RUNNING and has a runId
-        if (call.status === "RUNNING" && call.runId) {
+        // Poll if call is still active and has a runId
+        if ((call.status === "RUNNING" || call.status === "PENDING") && call.runId) {
           console.log(`[Status API] -> Polling HappyRobot for this call...`);
           const newStatus = await pollRunStatus(call.runId);
 

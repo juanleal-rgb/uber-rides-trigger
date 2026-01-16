@@ -1,8 +1,7 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { z } from "zod";
+import { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import {
   Clock,
   CheckCircle,
@@ -14,31 +13,7 @@ import {
 import { useSession } from "next-auth/react";
 import Image from "next/image";
 import { cn, formatRelativeTime } from "@/lib/utils";
-import { PhoneHappyRobotMorph } from "@/components/ui/PhoneHappyRobotMorph";
 import { LogoAnimationLoop } from "@/components/logo-animation-loop";
-import { useToast } from "@/components/ui/toaster";
-
-// Zod schema for rider onboarding trigger form
-const triggerFormSchema = z.object({
-  externalId: z
-    .string()
-    .optional()
-    .refine((v) => !v || /^\d+$/.test(v.trim()), {
-      message: "External ID debe ser un número entero",
-    }),
-  driverName: z.string().min(1, "Nombre del conductor es requerido"),
-  phoneNumber: z
-    .string()
-    .min(1, "Teléfono es requerido")
-    .regex(/^\+\d/, "El teléfono debe incluir el prefijo del país (ej: +34)"),
-  signUpDate: z.string().optional(),
-  flowType: z.string().optional(),
-  documentsUploaded: z.enum(["", "NO", "PARTIAL", "YES"]).optional(),
-  licenseCountry: z.string().optional(),
-  residentPermitStatus: z.string().optional(),
-});
-
-type TriggerFormData = z.infer<typeof triggerFormSchema>;
 
 interface InitiatorUser {
   id: string;
@@ -104,23 +79,10 @@ const statusConfig = {
 };
 
 export default function TriggerPage() {
-  const queryClient = useQueryClient();
   const { data: session } = useSession();
   const isAdmin = session?.user?.role === "admin";
-  const [formData, setFormData] = useState<TriggerFormData>({
-    externalId: undefined,
-    driverName: "",
-    phoneNumber: "",
-    signUpDate: "",
-    flowType: "",
-    documentsUploaded: "",
-    licenseCountry: "",
-    residentPermitStatus: "",
-  });
-  const [errors, setErrors] = useState<Record<string, string>>({});
   const [selectedCall, setSelectedCall] = useState<RiderCall | null>(null);
-  const [activeTab, setActiveTab] = useState<"form" | "calls">("form");
-  const { success: showSuccess } = useToast();
+  const [activeTab, setActiveTab] = useState<"pending" | "feed">("pending");
 
   // ESC key to close modal
   useEffect(() => {
@@ -131,11 +93,11 @@ export default function TriggerPage() {
     return () => window.removeEventListener("keydown", handleEsc);
   }, []);
 
-  // Query for active calls
-  const { data: activeCalls = [], isLoading: isLoadingCalls } = useQuery<
+  // Live calls feed (auto-refresh). Backend will poll HappyRobot to advance PENDING/RUNNING when configured.
+  const { data: calls = [], isLoading: isLoadingCalls } = useQuery<
     RiderCall[]
   >({
-    queryKey: ["activeCalls"],
+    queryKey: ["liveCalls"],
     queryFn: async () => {
       const res = await fetch("/api/calls/status");
       if (!res.ok) throw new Error("Error al obtener las llamadas");
@@ -144,112 +106,51 @@ export default function TriggerPage() {
     refetchInterval: 3000, // Auto-refresh every 3 seconds
   });
 
-  // Mutation for triggering a call
-  const triggerMutation = useMutation({
-    mutationFn: async (data: TriggerFormData) => {
-      const payload = {
-        externalId: data.externalId?.trim()
-          ? Number(data.externalId.trim())
-          : undefined,
-        driverName: data.driverName.trim(),
-        phoneNumber: data.phoneNumber.trim(),
-        signUpDate: data.signUpDate?.trim() ? data.signUpDate.trim() : undefined,
-        flowType: data.flowType?.trim() ? data.flowType.trim() : undefined,
-        documentsUploaded:
-          data.documentsUploaded ? data.documentsUploaded : undefined,
-        licenseCountry: data.licenseCountry?.trim()
-          ? data.licenseCountry.trim()
-          : undefined,
-        residentPermitStatus: data.residentPermitStatus?.trim()
-          ? data.residentPermitStatus.trim()
-          : undefined,
-      };
-
-      const res = await fetch("/api/calls/trigger", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+  // Pending (domain) calls: Call Status = PENDING (or null)
+  const pendingCalls = useMemo(() => {
+    return calls
+      .filter((c) => c.contactStatus === null || c.contactStatus === "PENDING")
+      .sort((a, b) => {
+        const aScore = (a.urgentFlag ? 4 : 0) + (a.legalIssueFlag ? 2 : 0) + (a.humanRequested ? 1 : 0);
+        const bScore = (b.urgentFlag ? 4 : 0) + (b.legalIssueFlag ? 2 : 0) + (b.humanRequested ? 1 : 0);
+        if (aScore !== bScore) return bScore - aScore;
+        return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
       });
-      if (!res.ok) {
-        const error = await res.json();
-        throw new Error(error.error || "Error al iniciar la llamada");
-      }
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["activeCalls"] });
-      setErrors({});
-      showSuccess("Llamada iniciada correctamente");
-      // Switch to calls tab on mobile after triggering
-      setActiveTab("calls");
-    },
-  });
+  }, [calls]);
 
-  const handleInputChange = (field: keyof TriggerFormData, value: string) => {
-    setFormData((prev) => ({ ...prev, [field]: value }));
-    if (errors[field]) {
-      setErrors((prev) => {
-        const newErrors = { ...prev };
-        delete newErrors[field];
-        return newErrors;
-      });
-    }
-  };
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-
-    const result = triggerFormSchema.safeParse(formData);
-    if (!result.success) {
-      const fieldErrors: Record<string, string> = {};
-      result.error.errors.forEach((err) => {
-        if (err.path[0]) {
-          fieldErrors[err.path[0] as string] = err.message;
-        }
-      });
-      setErrors(fieldErrors);
-      return;
-    }
-
-    triggerMutation.mutate(formData);
-  };
-
-  const isFormValid =
-    formData.driverName.trim() !== "" && formData.phoneNumber.trim() !== "";
-
-  // Count active/running calls for badge
-  const activeCallsCount = activeCalls.filter(
-    (c) => c.status === "PENDING" || c.status === "RUNNING",
-  ).length;
+  const activeRunsCount = useMemo(
+    () => calls.filter((c) => c.status === "PENDING" || c.status === "RUNNING").length,
+    [calls],
+  );
 
   return (
     <div className="flex h-full flex-col">
       {/* Mobile Tab Bar */}
       <div className="flex border-b border-border-subtle md:hidden">
         <button
-          onClick={() => setActiveTab("form")}
+          onClick={() => setActiveTab("pending")}
           className={cn(
             "flex-1 px-4 py-3 text-sm font-medium transition-colors",
-            activeTab === "form"
+            activeTab === "pending"
               ? "border-b-2 border-accent-primary text-fg-primary"
               : "text-fg-muted hover:text-fg-secondary",
           )}
         >
-          Iniciar Llamada
+          Pendientes
         </button>
         <button
-          onClick={() => setActiveTab("calls")}
+          onClick={() => setActiveTab("feed")}
           className={cn(
             "flex-1 px-4 py-3 text-sm font-medium transition-colors",
-            activeTab === "calls"
+            activeTab === "feed"
               ? "border-b-2 border-accent-primary text-fg-primary"
               : "text-fg-muted hover:text-fg-secondary",
           )}
         >
-          Llamadas Activas
-          {activeCallsCount > 0 && (
+          En directo
+          {activeRunsCount > 0 && (
             <span className="ml-2 inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-accent-primary px-1.5 text-xs font-medium text-white">
-              {activeCallsCount}
+              {activeRunsCount}
             </span>
           )}
         </button>
@@ -257,216 +158,122 @@ export default function TriggerPage() {
 
       {/* Main Content */}
       <div className="flex flex-1 overflow-hidden">
-        {/* Left: Form */}
+        {/* Left: Pending */}
         <div
           className={cn(
             "flex-1 overflow-auto border-r border-border-subtle p-4 md:p-6",
-            activeTab !== "form" && "hidden md:block",
+            activeTab !== "pending" && "hidden md:block",
           )}
         >
-          <div className="mx-auto max-w-2xl">
+          <div className="mx-auto max-w-3xl">
             <div className="mb-6 hidden md:block">
               <h1 className="text-xl font-semibold text-fg-primary">
-                  Iniciar llamada (Onboarding Rider)
+                Monitor en directo
               </h1>
+              <p className="mt-1 text-sm text-fg-muted">
+                Auto-refresh cada 3s. La app no dispara llamadas (las crea tu flujo cada 5 min).
+              </p>
             </div>
 
-            <form onSubmit={handleSubmit} className="space-y-6">
-                <div className="linear-card p-5">
-                  <h2 className="mb-4 text-sm font-medium text-fg-secondary">
-                    Datos del Rider
-                  </h2>
-
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <div>
-                      <label className="mb-1.5 block text-[13px] font-medium text-fg-muted">
-                        External ID (opcional)
-                      </label>
-                      <input
-                        type="text"
-                        value={formData.externalId || ""}
-                        onChange={(e) =>
-                          handleInputChange("externalId", e.target.value)
-                        }
-                        placeholder="1"
-                        className={cn(
-                          "linear-input",
-                          errors.externalId && "border-red-500/50",
-                        )}
-                      />
-                      {errors.externalId && (
-                        <p className="mt-1 text-xs text-red-400">
-                          {errors.externalId}
-                        </p>
-                      )}
-                    </div>
-
-                    <div />
-
-                    <div>
-                      <label className="mb-1.5 block text-[13px] font-medium text-fg-muted">
-                        Nombre del conductor *
-                      </label>
-                      <input
-                        type="text"
-                        value={formData.driverName}
-                        onChange={(e) =>
-                          handleInputChange("driverName", e.target.value)
-                        }
-                        placeholder="João Silva"
-                        className={cn(
-                          "linear-input",
-                          errors.driverName && "border-red-500/50",
-                        )}
-                      />
-                      {errors.driverName && (
-                        <p className="mt-1 text-xs text-red-400">
-                          {errors.driverName}
-                        </p>
-                      )}
-                    </div>
-
-                    <div>
-                      <label className="mb-1.5 block text-[13px] font-medium text-fg-muted">
-                        Teléfono *
-                      </label>
-                      <input
-                        type="text"
-                        value={formData.phoneNumber}
-                        onChange={(e) =>
-                          handleInputChange("phoneNumber", e.target.value)
-                        }
-                        placeholder="+34 612 345 678"
-                        className={cn(
-                          "linear-input",
-                          errors.phoneNumber && "border-red-500/50",
-                        )}
-                      />
-                      {errors.phoneNumber && (
-                        <p className="mt-1 text-xs text-red-400">
-                          {errors.phoneNumber}
-                        </p>
-                      )}
-                    </div>
-
-                    <div>
-                      <label className="mb-1.5 block text-[13px] font-medium text-fg-muted">
-                        Sign-up date (YYYY-MM-DD)
-                      </label>
-                      <input
-                        type="text"
-                        value={formData.signUpDate || ""}
-                        onChange={(e) =>
-                          handleInputChange("signUpDate", e.target.value)
-                        }
-                        placeholder="2026-01-10"
-                        className="linear-input"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="mb-1.5 block text-[13px] font-medium text-fg-muted">
-                        Flow type
-                      </label>
-                      <input
-                        type="text"
-                        value={formData.flowType || ""}
-                        onChange={(e) =>
-                          handleInputChange("flowType", e.target.value)
-                        }
-                        placeholder="Uber X / Uber Black / Courier"
-                        className="linear-input"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="mb-1.5 block text-[13px] font-medium text-fg-muted">
-                        Documents uploaded
-                      </label>
-                      <select
-                        value={formData.documentsUploaded || ""}
-                        onChange={(e) =>
-                          handleInputChange("documentsUploaded", e.target.value)
-                        }
-                        className="linear-input"
-                      >
-                        <option value="">—</option>
-                        <option value="NO">No</option>
-                        <option value="PARTIAL">Partial</option>
-                        <option value="YES">Yes</option>
-                      </select>
-                    </div>
-
-                    <div>
-                      <label className="mb-1.5 block text-[13px] font-medium text-fg-muted">
-                        License country
-                      </label>
-                      <input
-                        type="text"
-                        value={formData.licenseCountry || ""}
-                        onChange={(e) =>
-                          handleInputChange("licenseCountry", e.target.value)
-                        }
-                        placeholder="Portugal"
-                        className="linear-input"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="mb-1.5 block text-[13px] font-medium text-fg-muted">
-                        Resident permit status
-                      </label>
-                      <input
-                        type="text"
-                        value={formData.residentPermitStatus || ""}
-                        onChange={(e) =>
-                          handleInputChange(
-                            "residentPermitStatus",
-                            e.target.value,
-                          )
-                        }
-                        placeholder="Active / Processing / N/A"
-                        className="linear-input"
-                      />
-                    </div>
-                  </div>
+            <div className="linear-card p-5">
+              <div className="mb-4 flex items-center justify-between">
+                <h2 className="text-sm font-medium text-fg-secondary">
+                  Pendientes (Call Status)
+                </h2>
+                <div className="text-xs text-fg-muted">
+                  {pendingCalls.length} pending · {activeRunsCount} activos
                 </div>
+              </div>
 
-              {/* Submit button with PhoneHappyRobotMorph animation */}
-              <button
-                type="submit"
-                disabled={!isFormValid || triggerMutation.isPending}
-                className="linear-btn-primary flex w-full items-center justify-center gap-2 py-3"
-              >
-                <PhoneHappyRobotMorph
-                  size={18}
-                  logoColor="white"
-                  variant="flip"
-                  isActive={isFormValid}
-                />
-                <span>
-                  {triggerMutation.isPending
-                    ? "Iniciando llamada..."
-                    : "Iniciar Llamada"}
-                </span>
-              </button>
-
-              {triggerMutation.isError && (
-                <div className="rounded-lg border border-status-danger/20 bg-status-danger/10 p-3">
-                  <p className="text-sm text-status-danger">
-                    {triggerMutation.error.message}
-                  </p>
+              {isLoadingCalls ? (
+                <div className="flex items-center justify-center py-10">
+                  <Loader2 className="h-6 w-6 animate-spin text-fg-muted" />
+                </div>
+              ) : pendingCalls.length === 0 ? (
+                <div className="rounded-lg border border-border-subtle bg-bg-elevated p-4 text-sm text-fg-muted">
+                  No hay llamadas pending.
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {pendingCalls.map((call) => {
+                    const config = statusConfig[call.status];
+                    const StatusIcon = config.icon;
+                    return (
+                      <div
+                        key={call.id}
+                        className="linear-card cursor-pointer p-4 transition-all hover:border-accent-primary/50"
+                        onClick={() => setSelectedCall(call)}
+                      >
+                        <div className="flex items-start justify-between">
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate font-medium text-fg-primary">
+                              {call.rider.driverName}
+                            </p>
+                            <p className="mt-0.5 text-sm text-fg-muted">
+                              {call.rider.phoneNumber}
+                            </p>
+                            {(call.rider.flowType || call.rider.documentsUploaded) && (
+                              <p className="mt-1 text-xs text-fg-muted">
+                                {call.rider.flowType || "—"}{" "}
+                                {call.rider.documentsUploaded
+                                  ? `· Docs: ${call.rider.documentsUploaded}`
+                                  : ""}
+                              </p>
+                            )}
+                            <div className="mt-2 flex flex-wrap gap-1">
+                              <span className="pill pill-pending">
+                                {call.contactStatus || "PENDING"}
+                              </span>
+                              {call.urgentFlag && (
+                                <span className="pill pill-failed">URGENT</span>
+                              )}
+                              {call.legalIssueFlag && (
+                                <span className="pill pill-failed">LEGAL</span>
+                              )}
+                              {call.humanRequested && (
+                                <span className="pill pill-pending">HUMAN</span>
+                              )}
+                            </div>
+                          </div>
+                          <div className={cn("pill", config.class)}>
+                            <StatusIcon
+                              className={cn(
+                                "h-3 w-3",
+                                call.status === "RUNNING" && "animate-spin",
+                              )}
+                            />
+                            {config.label}
+                          </div>
+                        </div>
+                        <div className="mt-2 flex items-center justify-between text-xs text-fg-muted">
+                          <span>
+                            {formatRelativeTime(new Date(call.updatedAt))}
+                          </span>
+                          {call.runId && (
+                            <span className="font-mono text-[10px]">
+                              {call.runId.slice(0, 8)}...
+                            </span>
+                          )}
+                        </div>
+                        {call.errorMsg && (
+                          <div className="mt-2 rounded bg-status-danger/10 px-2 py-1 text-xs text-status-danger">
+                            {call.errorMsg}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               )}
-            </form>
+            </div>
           </div>
         </div>
 
-        {/* Right: Active calls */}
+        {/* Right: Feed */}
         <div
           className={cn(
             "w-full overflow-auto bg-bg-surface p-4 md:w-[400px] md:p-6",
-            activeTab !== "calls" && "hidden md:block",
+            activeTab !== "feed" && "hidden md:block",
           )}
         >
           <div className="mb-4 flex items-center justify-between">
@@ -492,7 +299,7 @@ export default function TriggerPage() {
             <div className="flex items-center justify-center py-12">
               <Loader2 className="h-6 w-6 animate-spin text-fg-muted" />
             </div>
-          ) : activeCalls.length === 0 ? (
+          ) : calls.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-8">
               <LogoAnimationLoop size={40} pauseDuration={5} />
               <p className="mt-4 text-sm text-fg-muted">
@@ -501,7 +308,7 @@ export default function TriggerPage() {
             </div>
           ) : (
             <div className="space-y-3">
-              {activeCalls.map((call) => {
+              {calls.map((call) => {
                 const config = statusConfig[call.status];
                 const StatusIcon = config.icon;
                 return (
@@ -691,8 +498,8 @@ export default function TriggerPage() {
                     (selectedCall.metadata as any)?.workflowResult?.transcript ||
                     "—"}
                 </pre>
-              </div>
-            )}
+                </div>
+              )}
 
             {selectedCall.errorMsg && (
               <div className="mt-6 rounded-lg border border-status-danger/20 bg-status-danger/10 p-4">
