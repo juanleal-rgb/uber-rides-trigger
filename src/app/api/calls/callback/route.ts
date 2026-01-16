@@ -27,6 +27,14 @@ function asString(v: unknown): string | null {
   return typeof v === "string" && v.trim() ? v : null;
 }
 
+function asInt(v: unknown): number | null {
+  if (typeof v === "number" && Number.isInteger(v)) return v;
+  if (typeof v === "string" && v.trim() && /^\d+$/.test(v.trim())) {
+    return Number(v.trim());
+  }
+  return null;
+}
+
 function asBoolean(v: unknown): boolean | null {
   if (typeof v === "boolean") return v;
   if (typeof v === "number") return v !== 0;
@@ -79,11 +87,23 @@ export async function POST(req: NextRequest) {
     const runId =
       asString(anyBody?.run_id) || asString(anyBody?.runId) || asString(anyBody?.id);
 
-    if (!riderCallId && !runId) {
+    // Support cron/workflow sending "context" as external id (CSV row id)
+    // Examples:
+    // - { context: "11", ... }
+    // - { context: { external_id: 11 }, ... }
+    // - { external_id: 11, ... }
+    const externalId =
+      asInt(anyBody?.external_id) ||
+      asInt(anyBody?.externalId) ||
+      asInt(anyBody?.context?.external_id) ||
+      asInt(anyBody?.context?.externalId) ||
+      asInt(anyBody?.context);
+
+    if (!riderCallId && !runId && !externalId) {
       return NextResponse.json(
         {
           error: "Missing correlation id",
-          hint: "Send context.source.rider_call_id (recommended) or run_id.",
+          hint: "Send context.source.rider_call_id (recommended) or run_id, or external_id/context=<riders.external_id>.",
         },
         { status: 400 },
       );
@@ -130,8 +150,62 @@ export async function POST(req: NextRequest) {
     const now = new Date();
 
     const updated = await prisma.$transaction(async (tx) => {
-      const where = riderCallId ? { id: riderCallId } : { runId: runId! };
-      const existing = await tx.riderCall.findUnique({ where });
+      let where: { id?: string; runId?: string } = {};
+      if (riderCallId) where = { id: riderCallId };
+      else if (runId) where = { runId: runId! };
+
+      let existing = Object.keys(where).length
+        ? await tx.riderCall.findUnique({ where: where as any })
+        : null;
+
+      // If we only have externalId, or if riderCallId/runId didn't match, correlate via Rider.externalId
+      if (!existing && externalId) {
+        const rider = await tx.rider.findUnique({
+          where: { externalId },
+        });
+        if (!rider) return null;
+
+        existing =
+          (await tx.riderCall.findFirst({
+            where: {
+              riderId: rider.id,
+              OR: [
+                { status: CallStatus.PENDING },
+                { status: CallStatus.RUNNING },
+                { contactStatus: null },
+                { contactStatus: ContactStatus.PENDING },
+              ],
+            },
+            orderBy: { createdAt: "desc" },
+          })) ||
+          (await tx.riderCall.findFirst({
+            where: { riderId: rider.id },
+            orderBy: { createdAt: "desc" },
+          }));
+
+        // If no calls exist yet, create one so the callback can persist the outcome.
+        if (!existing) {
+          existing = await tx.riderCall.create({
+            data: {
+              riderId: rider.id,
+              status: status || CallStatus.COMPLETED,
+              contactStatus: contactStatus || ContactStatus.COMPLETED,
+              contactedAt: now,
+              summary: summary || null,
+              transcript: transcript || null,
+              urgentFlag: urgentFlag ?? false,
+              legalIssueFlag: legalIssueFlag ?? false,
+              humanRequested: humanRequested ?? false,
+              ...(runId ? { runId } : {}),
+              metadata: {
+                source: "callback_external_id",
+                externalId,
+              } as unknown as Prisma.InputJsonValue,
+            },
+          });
+        }
+      }
+
       if (!existing) return null;
 
       const existingMetadata =
@@ -163,7 +237,7 @@ export async function POST(req: NextRequest) {
         status === CallStatus.CANCELED;
 
       const updatedCall = await tx.riderCall.update({
-        where,
+        where: { id: existing.id },
         data: {
           ...(runId && !existing.runId ? { runId } : {}),
           ...(status ? { status } : {}),
