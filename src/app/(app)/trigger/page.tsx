@@ -26,9 +26,11 @@ interface Rider {
   externalId: number | null;
   phoneNumber: string;
   driverName: string;
+  city: string | null;
   signUpDate: string | null;
   flowType: string | null;
   documentsUploaded: "NO" | "PARTIAL" | "YES" | null;
+  documents: Record<string, unknown> | null;
   licenseCountry: string | null;
   residentPermitStatus: string | null;
   lastContactAt: string | null;
@@ -46,6 +48,8 @@ interface RiderCall {
   contactedAt: string | null;
   transcript: string | null;
   summary: string | null;
+  sentiment: string | null;
+  attempt: number | null;
   urgentFlag: boolean;
   legalIssueFlag: boolean;
   humanRequested: boolean;
@@ -214,7 +218,7 @@ export default function TriggerPage() {
                             </p>
                             {(call.rider.flowType || call.rider.documentsUploaded) && (
                               <p className="mt-1 text-xs text-fg-muted">
-                                {call.rider.flowType || "—"}{" "}
+                                {(call.rider.city || call.rider.flowType || "—") + " "}
                                 {call.rider.documentsUploaded
                                   ? `· Docs: ${call.rider.documentsUploaded}`
                                   : ""}

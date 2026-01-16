@@ -32,9 +32,11 @@ interface Rider {
   externalId: number | null;
   phoneNumber: string;
   driverName: string;
+  city: string | null;
   signUpDate: string | null;
   flowType: string | null;
   documentsUploaded: "NO" | "PARTIAL" | "YES" | null;
+  documents: Record<string, unknown> | null;
   licenseCountry: string | null;
   residentPermitStatus: string | null;
   urgentFlag: boolean;
@@ -50,6 +52,8 @@ interface RiderCall {
   contactedAt: string | null;
   transcript: string | null;
   summary: string | null;
+  sentiment: string | null;
+  attempt: number | null;
   urgentFlag: boolean;
   legalIssueFlag: boolean;
   humanRequested: boolean;
@@ -247,7 +251,7 @@ export default function LlamadasPage() {
               <tr>
                 <th className="w-[25%]">Driver</th>
                 <th className="w-[15%]">Telefono</th>
-                <th className="w-[20%]">Flow</th>
+                <th className="w-[20%]">City</th>
                 <th className="w-[15%]">Resultado</th>
                 <th className="w-[15%]">Estado</th>
                 <th className="w-[10%]">Fecha</th>
@@ -292,7 +296,7 @@ export default function LlamadasPage() {
                         {call.rider.phoneNumber}
                       </td>
                       <td className="w-[20%] max-w-[200px] truncate text-fg-secondary">
-                        {call.rider.flowType || "-"}
+                        {call.rider.city || call.rider.flowType || "-"}
                       </td>
                       <td className="w-[15%] text-xs text-fg-secondary">
                         {call.contactStatus || "-"}
@@ -399,11 +403,21 @@ export default function LlamadasPage() {
             </div>
 
             <div className="grid gap-4 sm:grid-cols-2">
+              <DetailField label="City" value={selectedCall.rider.city} />
               <DetailField label="Flow type" value={selectedCall.rider.flowType} />
               <DetailField
                 label="Documents uploaded"
                 value={selectedCall.rider.documentsUploaded || "-"}
               />
+              <DetailField
+                label="Attempt"
+                value={
+                  typeof selectedCall.attempt === "number"
+                    ? String(selectedCall.attempt)
+                    : "-"
+                }
+              />
+              <DetailField label="Sentiment" value={selectedCall.sentiment} />
               <DetailField
                 label="License country"
                 value={selectedCall.rider.licenseCountry}

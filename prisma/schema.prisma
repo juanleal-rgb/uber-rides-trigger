@@ -46,9 +46,11 @@ model Rider {
   externalId            Int?                     @unique @map("external_id")
   phoneNumber           String                   @map("phone_number")
   driverName            String                   @map("driver_name")
+  city                  String?                  @map("city")
   signUpDate            DateTime?                @map("sign_up_date")
   flowType              String?                  @map("flow_type")
   documentsUploaded     DocumentsUploadedStatus? @map("documents_uploaded")
+  documents             Json?                    @map("documents")
   licenseCountry        String?                  @map("license_country")
   residentPermitStatus  String?                  @map("resident_permit_status")
 
@@ -66,6 +68,7 @@ model Rider {
 
   @@index([phoneNumber])
   @@index([driverName])
+  @@index([city])
   @@index([flowType])
   @@index([urgentFlag])
   @@index([legalIssueFlag])
@@ -84,6 +87,8 @@ model RiderCall {
 
   transcript       String?
   summary          String?
+  sentiment        String?       @map("sentiment")
+  attempt          Int?          @map("attempt")
   urgentFlag       Boolean        @default(false) @map("urgent_flag")
   legalIssueFlag   Boolean        @default(false) @map("legal_issue_flag")
   humanRequested   Boolean        @default(false) @map("human_requested")
@@ -102,6 +107,7 @@ model RiderCall {
 
   @@index([status])
   @@index([createdAt])
+  @@index([attempt])
   @@index([riderId])
   @@index([initiatedByUserId])
   @@map("rider_calls")
