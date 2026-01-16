@@ -1,0 +1,4 @@
+#!/bin/sh
+echo "🏗️  Running build check..."
+npm run build || { echo "❌ Build failed."; exit 1; }
+echo "✅ Pre-push checks passed!"

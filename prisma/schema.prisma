@@ -1,0 +1,108 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  name         String?
+  passwordHash String   @map("password_hash")
+  role         String   @default("user")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+  riderCalls   RiderCall[]
+
+  @@map("users")
+}
+
+enum CallStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELED
+}
+
+enum DocumentsUploadedStatus {
+  NO
+  PARTIAL
+  YES
+}
+
+enum ContactStatus {
+  PENDING
+  NO_ANSWER
+  VOICEMAIL
+  COMPLETED
+}
+
+model Rider {
+  id                    String                   @id @default(uuid())
+  externalId            Int?                     @unique @map("external_id")
+  phoneNumber           String                   @map("phone_number")
+  driverName            String                   @map("driver_name")
+  signUpDate            DateTime?                @map("sign_up_date")
+  flowType              String?                  @map("flow_type")
+  documentsUploaded     DocumentsUploadedStatus? @map("documents_uploaded")
+  licenseCountry        String?                  @map("license_country")
+  residentPermitStatus  String?                  @map("resident_permit_status")
+
+  // Current/derived state for fast filtering in UI
+  lastContactAt         DateTime?                @map("last_contact_at")
+  lastContactStatus     ContactStatus?           @map("last_contact_status")
+  urgentFlag            Boolean                  @default(false) @map("urgent_flag")
+  legalIssueFlag        Boolean                  @default(false) @map("legal_issue_flag")
+  humanRequested        Boolean                  @default(false) @map("human_requested")
+
+  createdAt             DateTime                 @default(now()) @map("created_at")
+  updatedAt             DateTime                 @updatedAt @map("updated_at")
+
+  calls                 RiderCall[]
+
+  @@index([phoneNumber])
+  @@index([driverName])
+  @@index([flowType])
+  @@index([urgentFlag])
+  @@index([legalIssueFlag])
+  @@index([humanRequested])
+  @@map("riders")
+}
+
+model RiderCall {
+  id               String        @id @default(uuid())
+  runId            String?       @unique @map("run_id")
+  status           CallStatus    @default(PENDING)
+
+  // Domain outcome (independent from HappyRobot run status)
+  contactStatus    ContactStatus? @map("contact_status")
+  contactedAt      DateTime?      @map("contacted_at")
+
+  transcript       String?
+  summary          String?
+  urgentFlag       Boolean        @default(false) @map("urgent_flag")
+  legalIssueFlag   Boolean        @default(false) @map("legal_issue_flag")
+  humanRequested   Boolean        @default(false) @map("human_requested")
+
+  metadata         Json?
+  errorMsg         String?       @map("error_msg")
+  createdAt        DateTime      @default(now()) @map("created_at")
+  updatedAt        DateTime      @updatedAt @map("updated_at")
+  completedAt      DateTime?     @map("completed_at")
+
+  riderId          String        @map("rider_id")
+  rider            Rider         @relation(fields: [riderId], references: [id])
+
+  initiatedByUserId String?      @map("user_id")
+  initiatedByUser   User?        @relation(fields: [initiatedByUserId], references: [id])
+
+  @@index([status])
+  @@index([createdAt])
+  @@index([riderId])
+  @@index([initiatedByUserId])
+  @@map("rider_calls")
+}
